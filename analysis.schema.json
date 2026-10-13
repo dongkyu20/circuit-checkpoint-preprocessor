@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Circuit checkpoint preprocessing (candidate rules, not verdicts)",
+  "type": "object",
+  "required": ["summary", "checks", "issues"],
+  "additionalProperties": false,
+  "properties": {
+    "summary": {"type": "string", "minLength": 1},
+    "checks": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["target_kind", "target_description", "part_numbers", "applicability", "requirement", "level", "parameters", "required_design_facts", "evidence"],
+        "properties": {
+          "target_kind": {"type": "string", "enum": ["input_pin", "bidirectional_pin", "control_pin", "power_pin", "component", "signal", "circuit", "unknown"]},
+          "target_description": {"type": "string", "minLength": 1},
+          "part_numbers": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "applicability": {"type": ["string", "null"]},
+          "requirement": {"type": "string", "minLength": 1},
+          "level": {"type": "string", "enum": ["mandatory", "recommended", "informational", "unknown"]},
+          "parameters": {
+            "type": "array",
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["name", "value", "unit", "role", "qualifier"],
+              "properties": {
+                "name": {"type": "string", "minLength": 1},
+                "value": {"type": ["number", "string", "null"]},
+                "unit": {"type": ["string", "null"]},
+                "role": {"type": "string", "enum": ["expected", "recommended", "limit", "unknown"]},
+                "qualifier": {"type": ["string", "null"]}
+              }
+            }
+          },
+          "required_design_facts": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "evidence": {
+            "type": "array", "minItems": 1,
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["field", "quote"],
+              "properties": {
+                "field": {"type": "string", "enum": ["checkpoint", "specification", "design_template", "reference_document", "pin_info"]},
+                "quote": {"type": "string", "minLength": 1}
+              }
+            }
+          }
+        }
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["code", "description"],
+        "properties": {
+          "code": {"type": "string", "enum": ["contradiction", "missing_reference_table", "missing_scope", "ambiguous", "missing_design_context", "other"]},
+          "description": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}
