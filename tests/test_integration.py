@@ -1,4 +1,6 @@
 """Offline integration: actual XLSX reader + actual subprocess + restart cache."""
+import csv
+import io
 import json
 import os
 from pathlib import Path
@@ -157,6 +159,43 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(len(results), 12000)
         self.assertEqual(results[-1]["excel_row"], 12001)
         self.assertTrue(all(r["status"] == "pending" for r in results))
+
+    def test_txt_uses_cli_and_reuses_equivalent_xlsx_cache(self):
+        row = ["1", "0", "unused GND", "GND", "pin:", "f.pdf"]
+        make_xlsx(self.xlsx, [row])
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.xlsx = self.folder / "source.txt"
+        text = io.StringIO(newline="")
+        writer = csv.writer(text)
+        writer.writerow(["adminno", "seqno", "Checkpoint", "Specification", "설계치", "참조문서"])
+        writer.writerow(row)
+        self.xlsx.write_text(text.getvalue(), encoding="utf-8-sig")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.calls.read_text().splitlines()), 1)
+        self.assertEqual(self.results()[0]["status"], "normalized")
+        self.assertIsNone(self.results()[0]["sheet"])
+        # A new CSV/TXT rule really goes through the subprocess, not just the cache.
+        self.xlsx.write_text(text.getvalue().replace("unused GND", "changed GND"), encoding="utf-8-sig")
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertEqual(len(self.calls.read_text().splitlines()), 2)
+
+    def test_12000_txt_rows_dry_run_preserves_every_row(self):
+        self.xlsx = self.folder / "source.txt"
+        text = io.StringIO(newline="")
+        writer = csv.writer(text, delimiter="\t")
+        writer.writerow(["adminno", "seqno", "Checkpoint", "Specification", "설계치", "참조문서"])
+        for i in range(12000):
+            writer.writerow([str(i), "0", f"입력 GND {i}", "", "pin:", ""])
+        self.xlsx.write_bytes(text.getvalue().encode("cp949"))
+        result = self.run_script("--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.calls.exists())
+        rows = self.results()
+        self.assertEqual(len(rows), 12000)
+        self.assertEqual(rows[-1]["record_row"], 12001)
+        self.assertEqual(rows[-1]["input_encoding"], "cp949")
 
 
 if __name__ == "__main__":

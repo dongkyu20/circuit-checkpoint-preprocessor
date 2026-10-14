@@ -9,6 +9,7 @@ from datetime import date, datetime, timezone
 import csv
 import hashlib
 import html
+import io
 import json
 import math
 import os
@@ -130,6 +131,87 @@ def read_xlsx(path, sheet, header_row):
         return build_records(book[sheet].iter_rows(min_row=header_row, values_only=True), sheet, header_row)
     finally:
         book.close()
+
+
+def decode_table(path, encoding="auto"):
+    data = path.read_bytes()
+    encodings = (["utf-16"] if data.startswith((b"\xff\xfe", b"\xfe\xff")) else ["utf-8-sig", "cp949"]) if encoding == "auto" else [encoding]
+    for candidate in encodings:
+        try:
+            text = data.decode(candidate)
+        except UnicodeDecodeError:
+            continue
+        except LookupError as exc:
+            raise ValueError(f"알 수 없는 인코딩: {candidate}") from exc
+        if "\x00" in text:
+            raise ValueError("TXT/CSV에 NUL 문자가 있습니다. 실제 텍스트 변환 여부와 --encoding utf-16-le 등을 확인하세요.")
+        return text.lstrip("\ufeff"), candidate
+    raise ValueError(f"인코딩을 읽지 못했습니다 ({', '.join(encodings)}). --encoding utf-8 또는 --encoding cp949 등으로 지정하세요.")
+
+
+def parse_delimiter(value):
+    aliases = {"comma": ",", "tab": "\t", r"\t": "\t", "semicolon": ";", "pipe": "|"}
+    value = aliases.get(value, value)
+    if value != "auto" and (len(value) != 1 or value in ('"', "\n", "\r")):
+        raise ValueError("구분자는 auto, comma, tab, semicolon, pipe 또는 하나의 문자로 지정하세요")
+    return value
+
+
+def read_delimited(path, header_row=1, encoding="auto", delimiter="auto"):
+    text, used_encoding = decode_table(path, encoding)
+    delimiter = parse_delimiter(delimiter)
+    candidates = [",", "\t", ";", "|"] if delimiter == "auto" else [delimiter]
+    csv.field_size_limit(max(csv.field_size_limit(), 10_000_000))
+    matches = []
+    for candidate in candidates:
+        reader = csv.reader(io.StringIO(text, newline=""), delimiter=candidate, strict=True)
+        try:
+            for _ in range(header_row - 1):
+                next(reader)
+            headers = next(reader)
+        except (StopIteration, csv.Error):
+            continue
+        keys = [header_key(h) for h in headers]
+        if all(keys.count(k) == 1 for k in ("checkpoint", "specification", "설계치")):
+            matches.append((candidate, headers, reader))
+    if len(matches) != 1:
+        raise ValueError("CSV 헤더 또는 구분자를 확인하세요. Checkpoint, Specification, 설계치 열이 필요합니다. "
+                         "--delimiter tab/comma 및 --header-row를 지정할 수 있습니다. "
+                         "셀을 한 줄씩 나열한 TXT는 CSV 표 구조가 없어 읽을 수 없습니다.")
+    used_delimiter, headers, reader = matches[0]
+    values = [headers]
+    try:
+        for record_row, row in enumerate(reader, header_row + 1):
+            if row and len(row) != len(headers):
+                raise ValueError(f"CSV 레코드 {record_row}의 열 수 {len(row)}가 헤더 {len(headers)}와 다릅니다. "
+                                 "셀 안의 구분자와 개행은 CSV 따옴표로 감싸야 합니다.")
+            values.append(row)
+    except csv.Error as exc:
+        raise ValueError(f"CSV 형식 오류 (물리 줄 {reader.line_num}): {exc}. 따옴표와 셀 내부 개행을 확인하세요.") from exc
+    records = build_records(values, f"csv:{path.name}", header_row)
+    for record in records:
+        record["record_row"] = record["excel_row"]
+        record["excel_row"] = None
+        record["sheet"] = None
+        record["input_format"] = "csv"
+        record["input_encoding"] = used_encoding
+        record["input_delimiter"] = used_delimiter
+    return records
+
+
+def read_input(path, sheet, header_row, encoding="auto", delimiter="auto"):
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError(f"입력 파일을 찾지 못했습니다: {path.resolve()}\n현재 폴더: {Path.cwd()}\n실제 파일명 또는 전체 경로를 지정하세요.")
+    suffix = path.suffix.casefold()
+    if suffix in (".xlsx", ".xlsm"):
+        records = read_xlsx(path, sheet, header_row)
+        for record in records:
+            record["input_format"] = "xlsx"
+        return records
+    if suffix in (".csv", ".txt", ".tsv"):
+        return read_delimited(path, header_row, encoding, delimiter)
+    raise ValueError(f"지원하지 않는 확장자 {suffix!r}. XLSX, CSV, TXT 또는 TSV 파일을 지정하세요.")
 
 
 def validate_schema(value, schema, path="analysis"):
@@ -421,10 +503,12 @@ def export_results(rows, cache, folder, info):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Gemini CLI 기반 체크포인트 XLSX 전처리 (원본 수정 없음)")
+    parser = argparse.ArgumentParser(description="Gemini CLI 기반 체크포인트 XLSX/CSV/TXT 전처리 (원본 수정 없음)")
     parser.add_argument("input", type=Path)
-    parser.add_argument("--sheet", default="체크포인트_REF_GUIDE")
-    parser.add_argument("--header-row", type=int, default=1)
+    parser.add_argument("--sheet", default="체크포인트_REF_GUIDE", help="XLSX 시트 이름; CSV/TXT에는 적용하지 않음")
+    parser.add_argument("--header-row", type=int, default=1, help="헤더 행/CSV 논리 레코드 번호")
+    parser.add_argument("--encoding", default="auto", help="CSV/TXT 인코딩: auto(UTF-8, BOM UTF-16, CP949) 또는 직접 지정")
+    parser.add_argument("--delimiter", default="auto", help="CSV/TXT 구분자: auto, comma, tab, semicolon, pipe 또는 한 문자")
     parser.add_argument("--output", type=Path, default=Path("preprocessed"))
     parser.add_argument("--limit", type=int, help="빈 행 제외 상위 N행만 처리")
     parser.add_argument("--batch-size", type=int, default=10)
@@ -436,7 +520,7 @@ def main(argv=None):
     parser.add_argument("--interval", type=float, default=2)
     parser.add_argument("--backoff", type=float, default=10)
     parser.add_argument("--cache-tag", default="", help="기본 모델/CLI 설정 변경 시 새 태그로 캐시 분리")
-    parser.add_argument("--dry-run", action="store_true", help="XLSX 정규화만 수행; Gemini 호출 없음")
+    parser.add_argument("--dry-run", action="store_true", help="입력 정규화만 수행; Gemini 호출 없음")
     args = parser.parse_args(argv)
     if min(args.header_row, args.batch_size, args.max_batch_chars, args.attempts) < 1 or args.timeout <= 0 or args.interval < 0 or args.backoff < 0 or (args.limit is not None and args.limit < 1):
         parser.error("행/배치/시도 횟수/timeout/limit은 양수, interval/backoff는 0 이상이어야 합니다")
@@ -445,7 +529,7 @@ def main(argv=None):
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     with run_lock(args.output):
-        rows = read_xlsx(args.input, args.sheet, args.header_row)
+        rows = read_input(args.input, args.sheet, args.header_row, args.encoding, args.delimiter)
         total = len(rows)
         if args.limit:
             rows = rows[:args.limit]
@@ -460,7 +544,10 @@ def main(argv=None):
                 row["request_id"] = key
                 sources[key] = source
         atomic_write(args.output / "prepared.jsonl", "\n".join(dumps(r) for r in rows) + ("\n" if rows else ""))
-        info = {"input": str(args.input.resolve()), "sheet": args.sheet, "total_nonempty_rows": total,
+        input_format = "xlsx" if args.input.suffix.casefold() in (".xlsx", ".xlsm") else "csv"
+        info = {"input": str(args.input.resolve()), "sheet": args.sheet if input_format == "xlsx" else None,
+                "input_format": input_format, "input_encoding": rows[0].get("input_encoding") if rows else None,
+                "input_delimiter": rows[0].get("input_delimiter") if rows else None, "total_nonempty_rows": total,
                 "fingerprint": fingerprint, "requested_model": args.model or "cli-default", "dry_run": args.dry_run}
         with Cache(args.output / "state.sqlite3") as cache:
             pending = [(key, source) for key, source in sources.items() if cache.get(key) is None]

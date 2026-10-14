@@ -8,6 +8,10 @@ venv/
 *.xlsx
 *.xls
 *.csv
+*.tsv
+*.txt
+!prompt.txt
+!requirements.txt
 *.jsonl
 *.sqlite3
 *.sqlite3-*

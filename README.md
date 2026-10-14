@@ -1,6 +1,6 @@
-# 회로 체크포인트 전처리: XLSX + Gemini CLI
+# 회로 체크포인트 전처리: XLSX / CSV / TXT + Gemini CLI
 
-`체크포인트_REF_GUIDE` 시트의 Checkpoint와 Specification을 검증 규칙 후보로 구조화합니다. 설계치는 회로에서 추출할 정보의 양식으로 사용합니다. 원본 XLSX를 수정하지 않습니다. BOM/Netlist 추출과 최종 PASS/FAIL 판정은 이 코드의 범위에 포함되지 않습니다.
+XLSX의 `체크포인트_REF_GUIDE` 시트 또는 CSV 형식의 CSV/TXT/TSV 파일에서 Checkpoint와 Specification을 검증 규칙 후보로 구조화합니다. 설계치는 회로에서 추출할 정보의 양식으로 사용합니다. 원본 입력 파일을 수정하지 않습니다. BOM/Netlist 추출과 최종 PASS/FAIL 판정은 이 코드의 범위에 포함되지 않습니다.
 
 ## 설치
 
@@ -32,9 +32,39 @@ gemini --prompt "Return only the word OK. Do not use tools." --output-format jso
 
 ## 실행
 
-기본 시트 이름은 `체크포인트_REF_GUIDE`, 헤더는 첫 번째 행입니다. 필수 열은 `Checkpoint`, `Specification`, `설계치`입니다. 영문 열 이름의 대소문자와 앞뒤 공백은 허용합니다. `adminno`, `seqno`, `참조문서`, `pin_info`도 있으면 사용합니다.
+XLSX 기본 시트 이름은 `체크포인트_REF_GUIDE`, 헤더는 첫 번째 행입니다. 필수 열은 `Checkpoint`, `Specification`, `설계치`입니다. 영문 열 이름의 대소문자와 앞뒤 공백은 허용합니다. `adminno`, `seqno`, `참조문서`, `pin_info`도 있으면 사용합니다. CSV/TXT는 시트가 없으므로 `--sheet`를 사용하지 않아도 됩니다.
 
 실제 파일명을 지정하세요. 경로에 공백이 있으면 따옴표로 감싸세요.
+
+### CSV를 TXT로 저장한 경우
+
+파일 확장자로 입력 방식을 선택합니다. CSV 내용을 그대로 TXT로 저장한 경우 아래처럼 실행하세요. `rules.txt`는 실제 파일명으로 바꾸세요.
+
+```powershell
+git pull
+python preprocess.py "rules.txt" --output "result" --limit 30 --dry-run
+python preprocess.py "rules.txt" --output "result" --limit 30 --batch-size 5
+```
+
+쉼표, 탭, 세미콜론, 파이프 구분자는 필수 헤더를 기준으로 감지합니다. UTF-8(BOM 포함), BOM이 있는 UTF-16, CP949 인코딩은 엄격하게 디코딩합니다. 실제 사용한 인코딩과 구분자는 출력 JSON과 summary에 기록합니다. CP949 파일의 한글 내용이 의도와 맞는지는 dry-run 결과에서 확인하세요. 수동 지정도 가능합니다.
+
+```powershell
+python preprocess.py "rules.txt" --encoding cp949 --delimiter tab --output "result" --limit 30
+python preprocess.py "rules.csv" --encoding utf-8-sig --delimiter comma --output "result" --limit 30
+```
+
+TXT에는 아래와 같이 헤더와 열 구분이 유지되어 있어야 합니다.
+
+```csv
+adminno,seqno,Checkpoint,Specification,설계치,참조문서
+1336023553,0,"미사용 입력 핀을 VCC 또는 GND에 연결","VCC 또는 GND 연결","Unused input pin:","chip.pdf"
+```
+
+셀 안의 쉼표, 개행과 큰따옴표는 정상적인 CSV 인용 규칙을 유지해야 합니다. CSV를 메모장에서 그대로 TXT로 저장하는 것은 가능하지만, 셀을 한 줄씩 나열한 텍스트나 여러 시트의 표를 그대로 이어 붙인 파일은 입력 형식이 다릅니다. 이 경우 체크포인트 표 하나의 CSV 형태로 다시 저장하세요. 잘못된 열 수나 닫히지 않은 따옴표는 자동으로 보정하지 않고 오류를 표시합니다.
+
+CSV/TXT의 식별자는 문자열로 보존하여 선행 0을 잃지 않습니다. 출력의 `sheet`와 `excel_row`는 null이며 `record_row`가 헤더를 포함한 논리 레코드 번호를 나타냅니다. 셀 안에 여러 줄이 있으면 실제 텍스트 줄 번호와 다를 수 있습니다. `row_uid`는 파일명과 레코드 번호로 구성됩니다. 동일한 정규화 내용을 가진 기존 XLSX 결과는 캐시를 재사용합니다.
+
+CSV/TXT 입력만 사용할 때는 openpyxl이 필요하지 않습니다. 실제 Gemini 분석에는 설치 및 로그인된 Gemini CLI가 필요합니다.
 
 ### 1. AI 호출 없이 읽기 확인
 
@@ -76,10 +106,10 @@ python preprocess.py "checkpoint.xlsx" --output "result" --cache-tag "round2"
 
 | 파일 | 역할 |
 |---|---|
-| `preprocess.py` | XLSX 읽기, CLI 호출, 구조/근거 검증, 캐시, 결과 저장 |
+| `preprocess.py` | XLSX/CSV/TXT 읽기, CLI 호출, 구조/근거 검증, 캐시, 결과 저장 |
 | `prompt.txt` | 한국어 전처리 지침. 필요하면 직접 수정 |
 | `analysis.schema.json` | 모델이 출력할 analysis 구조 |
-| `requirements.txt` | Python 의존성. XLSX 읽기에 openpyxl만 사용 |
+| `requirements.txt` | XLSX 읽기에 openpyxl 사용. CSV/TXT는 Python 표준 라이브러리 사용 |
 | `tests/` | 오프라인 단위/통합 테스트 |
 
 ## 실행 결과
@@ -174,7 +204,8 @@ python preprocess.py "checkpoint.xlsx" --output "result" --batch-size 5 --timeou
 ## 전처리 정책과 한계
 
 - 원문과 전체 열 데이터는 로컬 출력에 보존합니다. 모델에는 Checkpoint, Specification, 설계치 양식, 참조문서 셀, pin_info만 전송합니다.
-- 내용이 정확히 같은 전처리 입력은 한 번만 분석하고 각 원본 행에 결과를 연결합니다. 식별자가 중복되어도 행은 삭제하지 않습니다. `row_uid`와 `requirement_id`는 현재 XLSX의 행 위치 기준이므로 정렬 후 다시 실행하면 달라질 수 있습니다.
+- 내용이 정확히 같은 전처리 입력은 한 번만 분석하고 각 원본 행에 결과를 연결합니다. 식별자가 중복되어도 행은 삭제하지 않습니다. `row_uid`와 `requirement_id`는 현재 입력의 행/레코드 위치 기준이므로 정렬 후 다시 실행하면 달라질 수 있습니다.
+- 데이터용 XLSX/CSV/TSV/TXT, 결과와 CLI 로그는 .gitignore에서 제외합니다. `prompt.txt`와 `requirements.txt`는 코드 파일이므로 예외로 추적합니다.
 - 수식 셀은 자동 계산하지 않습니다. 관련 수식이 있으면 결과값으로 저장한 입력 사본을 사용하거나 별도 전처리로 해소해야 합니다.
 - 첨부 PDF/메일의 파일명을 문서 본문으로 취급하지 않습니다. 외부 문서 읽기는 구현하지 않았습니다. 표나 본문이 필요하면 해당 원문을 별도로 확보해야 합니다.
 - Gemini CLI는 headless 모드에서도 `@file` 전처리를 할 수 있어, 전송 JSON의 `@`를 가역적인 `\u0040` escape로 표현합니다. 저장된 원문과 JSON 의미는 유지합니다.
@@ -191,7 +222,7 @@ python -m unittest discover -s tests -v
 
 오프라인 테스트는 실제 XLSX 읽기와 subprocess 호출을 사용합니다. Gemini 응답은 테스트용 실행 파일로 대체합니다. 통합 테스트의 실행 파일 fixture는 POSIX shebang을 사용하므로 Windows에서는 통합 테스트가 skip되고 단위 테스트가 실행됩니다. Windows 실제 Gemini CLI 연동은 현지 설치 환경에서 확인해야 합니다.
 
-검증 범위: 12,000행 읽기/보존, 캐시와 재시작, 중복 내용 재사용, 원문 변경 재처리, 부분 응답 재시도, 인증 실패 중단, timeout, Ctrl+C, 근거 인용과 응답 형식 검사. 실제 XLSX와 Gemini CLI가 제공되지 않아 실제 모델 출력의 품질과 계정 처리량은 측정하지 않았습니다.
+검증 범위: XLSX/TXT 각각 12,000행 읽기/보존, UTF-8/CP949/UTF-16, CSV 구분자, 여러 줄과 큰따옴표가 있는 셀, 선행 0, 긴 셀, CSV 오류 검출, XLSX/TXT 간 캐시 재사용, 재시작, 원문 변경 재처리, 부분 응답 재시도, 인증 실패 중단, timeout, Ctrl+C, 근거 인용과 응답 형식 검사. 실제 사용자 입력 파일과 Gemini CLI가 제공되지 않아 실제 모델 출력의 품질과 계정 처리량은 측정하지 않았습니다.
 
 ## 참고한 공식 문서
 
@@ -201,4 +232,4 @@ python -m unittest discover -s tests -v
 - https://geminicli.com/docs/reference/configuration/
 - https://github.com/google-gemini/gemini-cli/blob/main/packages/cli/src/nonInteractiveCli.ts
 
-작성일: 2026-10-13
+수정일: 2026-10-14
