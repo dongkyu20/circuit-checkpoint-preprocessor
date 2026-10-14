@@ -150,6 +150,18 @@ class TextInputTests(unittest.TestCase):
         self.assertEqual(row["checkpoint_id"], "00456:7")
         self.assertEqual(row["seqno_selection"], {"column": 4, "mode": "explicit"})
 
+    def test_cli_preserves_separate_seqno_meanings_without_column_selection(self):
+        path = self.folder / "different-seqno.txt"
+        path.write_text("adminno,seqno,seqno,Checkpoint,Specification,설계치\n123,0,7,GND,GND,pin:\n", encoding="utf-8")
+        output = self.folder / "separate-seqno"
+        result = subprocess.run([sys.executable, str(ROOT / "preprocess.py"), str(path),
+            "--output", str(output), "--dry-run"], capture_output=True, text=True, encoding="utf-8", timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = json.loads((output / "prepared.jsonl").read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual([field["value"] for field in row["seqno_fields"]], ["0", "7"])
+        self.assertEqual(row["checkpoint_id_basis"], "row")
+        self.assertNotIn("seqno_selection", row)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -166,27 +166,41 @@ class PreprocessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "adminno"):
             p.build_records(values, "s", 1, adminno_column=2)
 
-    def test_matching_adminno_and_seqno_duplicates_are_both_supported(self):
+    def test_matching_seqno_columns_remain_distinct_even_when_values_match(self):
         rows = p.build_records([
             ["Checkpoint", "Specification", "설계치", "adminno", "adminno", "seqno", "Seq No"],
             ["GND", "GND", "pin:", "00123", "00123", "0", "0"]
         ], "s", 1)
-        self.assertEqual(rows[0]["checkpoint_id"], "00123:0")
-        self.assertEqual(rows[0]["seqno_selection"], {"column": 6, "mode": "equal_duplicate"})
+        self.assertEqual(rows[0]["checkpoint_id"], "row:s:2")
+        self.assertEqual(rows[0]["checkpoint_id_basis"], "row")
+        self.assertNotIn("seqno_selection", rows[0])
+        self.assertEqual([item["value"] for item in rows[0]["seqno_fields"]], ["0", "0"])
         self.assertEqual(rows[0]["source_columns"]["seqno [col 6]"], "0")
         self.assertEqual(rows[0]["source_columns"]["Seq No [col 7]"], "0")
 
-    def test_seqno_conflict_requires_selection_and_zero_is_not_missing(self):
+    def test_distinct_seqno_values_are_preserved_and_selection_is_optional(self):
         values = [["Checkpoint", "Specification", "설계치", "adminno", "seqno", "seqno"],
                   ["GND", "GND", "pin:", "123", "0", "7"]]
-        with self.assertRaisesRegex(ValueError, "seqno.*5열.*6열"):
-            p.build_records(values, "s", 1)
+        automatic = p.build_records(values, "s", 1)[0]
+        self.assertEqual(automatic["checkpoint_id"], "row:s:2")
+        self.assertEqual(automatic["normalized_source"]["seqno"], "")
+        self.assertEqual([item["value"] for item in automatic["seqno_fields"]], ["0", "7"])
+        self.assertNotIn("missing_checkpoint_identifiers", automatic["source_issues"])
         rows = p.build_records(values, "s", 1, seqno_column=6)
         self.assertEqual(rows[0]["checkpoint_id"], "123:7")
-        self.assertIn("seqno_values_differ", rows[0]["source_issues"])
+        self.assertNotIn("seqno_values_differ", rows[0]["source_issues"])
         self.assertEqual(p.build_records(values, "s", 1, seqno_column=5)[0]["checkpoint_id"], "123:0")
         with self.assertRaisesRegex(ValueError, "seqno"):
             p.build_records(values, "s", 1, seqno_column=4)
+
+    def test_separate_seqno_columns_keep_unique_row_ids_and_original_values(self):
+        records = p.build_records([
+            ["adminno", "seqno", "seqno", "Checkpoint", "Specification", "설계치"],
+            ["123", "0", "10", "GND", "GND", "pin:"],
+            ["123", "0", "20", "GND", "GND", "pin:"]
+        ], "joined", 1)
+        self.assertEqual([r["checkpoint_id"] for r in records], ["row:joined:2", "row:joined:3"])
+        self.assertEqual([r["seqno_fields"][1]["value"] for r in records], ["10", "20"])
 
     def test_schema_rejects_unexpected_properties(self):
         bad = analysis()

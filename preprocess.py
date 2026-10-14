@@ -108,12 +108,17 @@ def build_records(rows, sheet, header_row, adminno_column=None, seqno_column=Non
         cols = id_positions[key]
         if option is not None and option not in cols:
             raise ValueError(f"--{key}-column {option}은 {key} 열이 아닙니다. {key} 열 위치: {cols}")
-        selected_indexes[key] = (option if option is not None else cols[0]) - 1 if cols else None
+        if key == "seqno" and len(cols) > 1 and option is None:
+            selected_indexes[key] = None
+        else:
+            selected_indexes[key] = (option if option is not None else cols[0]) - 1 if cols else None
+    separate_seqno = len(id_positions["seqno"]) > 1 and seqno_column is None
     field_indexes = {key: i for i, key in enumerate(keys)
                      if key in FIELDS and (key not in id_options or i == selected_indexes[key])}
     selections = {f"{key}_selection": {"column": selected_indexes[key] + 1,
                   "mode": "explicit" if option is not None else "equal_duplicate"}
-                  for key, option in id_options.items() if len(id_positions[key]) > 1 or option is not None}
+                  for key, option in id_options.items()
+                  if selected_indexes[key] is not None and (len(id_positions[key]) > 1 or option is not None)}
     source_headers, renamed = list(headers), []
     reserved = set(headers)
     for column, (original, key) in enumerate(zip(headers, keys), 1):
@@ -133,6 +138,9 @@ def build_records(rows, sheet, header_row, adminno_column=None, seqno_column=Non
             continue
         different_ids = []
         for key, option in id_options.items():
+            if key == "seqno":
+                # Joined seqno columns can have different business meanings; never require equality.
+                continue
             cols = id_positions[key]
             id_values = [normalize_text(cell_value(values[col - 1])) for col in cols]
             if len(set(id_values)) <= 1:
@@ -146,7 +154,8 @@ def build_records(rows, sheet, header_row, adminno_column=None, seqno_column=Non
         normalized = {FIELDS[key]: normalize_text(source[source_headers[i]]) for key, i in field_indexes.items()}
         normalized = {k: normalized.get(k, "") for k in ("checkpoint", "specification", "design_template", "reference_document", "pin_info", "adminno", "seqno")}
         identifiers = (normalized["adminno"], normalized["seqno"])
-        checkpoint_id = ":".join(identifiers) if all(identifiers) else f"row:{excel_row}"
+        checkpoint_id = (f"row:{sheet}:{excel_row}" if separate_seqno else
+                         ":".join(identifiers) if all(identifiers) else f"row:{excel_row}")
         formula_fields = [source_headers[i] for i in field_indexes.values()
                           if isinstance(source[source_headers[i]], str) and source[source_headers[i]].startswith("=")]
         records.append({
@@ -154,9 +163,15 @@ def build_records(rows, sheet, header_row, adminno_column=None, seqno_column=Non
             "sheet": sheet, "excel_row": excel_row,
             "source_columns": source, "normalized_source": normalized,
             **({"renamed_headers": renamed} if renamed else {}),
+            **({"seqno_fields": [{"column": col, "header": headers[col - 1],
+                  "source_key": source_headers[col - 1], "value": cell_value(values[col - 1])}
+                  for col in id_positions["seqno"]]} if len(id_positions["seqno"]) > 1 else {}),
+            **({"checkpoint_id_basis": "row"} if separate_seqno else {}),
             **selections,
             "source_issues": (["formula_requires_cached_value"] if formula_fields else []) +
-                             (["missing_checkpoint_identifiers"] if not all(identifiers) else []) + different_ids,
+                             (["missing_checkpoint_identifiers"]
+                              if not normalized["adminno"] or (not normalized["seqno"] and not separate_seqno)
+                              else []) + different_ids,
             "formula_fields": formula_fields,
             "eligible": bool(normalized["checkpoint"] or normalized["specification"]) and not formula_fields
         })
@@ -559,7 +574,7 @@ def main(argv=None):
     parser.add_argument("--encoding", default="auto", help="CSV/TXT 인코딩: auto(UTF-8, BOM UTF-16, CP949) 또는 직접 지정")
     parser.add_argument("--delimiter", default="auto", help="CSV/TXT 구분자: auto, comma, tab, semicolon, pipe 또는 한 문자")
     parser.add_argument("--adminno-column", type=int, help="중복 adminno 중 사용할 열의 1부터 시작하는 전체 표 열 번호")
-    parser.add_argument("--seqno-column", type=int, help="중복 seqno 중 사용할 열의 1부터 시작하는 전체 표 열 번호")
+    parser.add_argument("--seqno-column", type=int, help="checkpoint_id에 사용할 seqno 열 번호(1부터); 중복 열들은 항상 별개로 보존")
     parser.add_argument("--output", type=Path, default=Path("preprocessed"))
     parser.add_argument("--limit", type=int, help="빈 행 제외 상위 N행만 처리")
     parser.add_argument("--batch-size", type=int, default=10)
