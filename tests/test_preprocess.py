@@ -128,7 +128,7 @@ class PreprocessTests(unittest.TestCase):
         self.assertEqual(records[0]["source_columns"]["refdate [col 5]"], "2017")
 
     def test_duplicate_used_headers_report_names_and_column_positions(self):
-        for names in (["seqno", "Seq No"], ["참조문서", "참조문서"]):
+        for names in (["pin_info", "pin_info"], ["참조문서", "참조문서"]):
             with self.subTest(names=names):
                 with self.assertRaisesRegex(ValueError, "4열.*5열"):
                     p.build_records([["Checkpoint", "Specification", "설계치", *names]], "s", 1)
@@ -165,6 +165,28 @@ class PreprocessTests(unittest.TestCase):
         self.assertIn("adminno_values_differ", rows[0]["source_issues"])
         with self.assertRaisesRegex(ValueError, "adminno"):
             p.build_records(values, "s", 1, adminno_column=2)
+
+    def test_matching_adminno_and_seqno_duplicates_are_both_supported(self):
+        rows = p.build_records([
+            ["Checkpoint", "Specification", "설계치", "adminno", "adminno", "seqno", "Seq No"],
+            ["GND", "GND", "pin:", "00123", "00123", "0", "0"]
+        ], "s", 1)
+        self.assertEqual(rows[0]["checkpoint_id"], "00123:0")
+        self.assertEqual(rows[0]["seqno_selection"], {"column": 6, "mode": "equal_duplicate"})
+        self.assertEqual(rows[0]["source_columns"]["seqno [col 6]"], "0")
+        self.assertEqual(rows[0]["source_columns"]["Seq No [col 7]"], "0")
+
+    def test_seqno_conflict_requires_selection_and_zero_is_not_missing(self):
+        values = [["Checkpoint", "Specification", "설계치", "adminno", "seqno", "seqno"],
+                  ["GND", "GND", "pin:", "123", "0", "7"]]
+        with self.assertRaisesRegex(ValueError, "seqno.*5열.*6열"):
+            p.build_records(values, "s", 1)
+        rows = p.build_records(values, "s", 1, seqno_column=6)
+        self.assertEqual(rows[0]["checkpoint_id"], "123:7")
+        self.assertIn("seqno_values_differ", rows[0]["source_issues"])
+        self.assertEqual(p.build_records(values, "s", 1, seqno_column=5)[0]["checkpoint_id"], "123:0")
+        with self.assertRaisesRegex(ValueError, "seqno"):
+            p.build_records(values, "s", 1, seqno_column=4)
 
     def test_schema_rejects_unexpected_properties(self):
         bad = analysis()
