@@ -109,6 +109,41 @@ class PreprocessTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             p.build_records([["Checkpoint", "Specification", "設計値"]], "s", 1)
 
+    def test_duplicate_auxiliary_headers_preserve_both_columns(self):
+        records = p.build_records([
+            ["Checkpoint", "Specification", "설계치", "category", "category"],
+            ["GND", "GND", "pin:", "first", "second"]
+        ], "s", 1)
+        self.assertEqual(records[0]["source_columns"]["category [col 4]"], "first")
+        self.assertEqual(records[0]["source_columns"]["category [col 5]"], "second")
+        self.assertEqual(records[0]["renamed_headers"][0]["column"], 4)
+        self.assertEqual(records[0]["normalized_source"]["checkpoint"], "GND")
+
+    def test_case_and_space_collisions_in_auxiliary_headers_are_preserved(self):
+        records = p.build_records([
+            ["Checkpoint", "Specification", "설계치", "Ref Date", "refdate"],
+            ["GND", "GND", "pin:", "2012", "2017"]
+        ], "s", 1)
+        self.assertEqual(records[0]["source_columns"]["Ref Date [col 4]"], "2012")
+        self.assertEqual(records[0]["source_columns"]["refdate [col 5]"], "2017")
+
+    def test_duplicate_used_headers_report_names_and_column_positions(self):
+        for names in (["adminno", "Admin No"], ["참조문서", "참조문서"]):
+            with self.subTest(names=names):
+                with self.assertRaisesRegex(ValueError, "4열.*5열"):
+                    p.build_records([["Checkpoint", "Specification", "설계치", *names]], "s", 1)
+
+    def test_generated_header_names_cannot_overwrite_existing_header(self):
+        records = p.build_records([
+            ["Checkpoint", "Specification", "설계치", "x", "x", "x [col 4]"],
+            ["GND", "GND", "pin:", "a", "b", "c"]
+        ], "s", 1)
+        values = records[0]["source_columns"]
+        self.assertEqual(len(values), 6)
+        self.assertEqual(values["x [col 4]"], "c")
+        self.assertIn("a", values.values())
+        self.assertIn("b", values.values())
+
     def test_schema_rejects_unexpected_properties(self):
         bad = analysis()
         bad["pass"] = True

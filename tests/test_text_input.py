@@ -87,6 +87,15 @@ class TextInputTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "헤더|구분자|CSV"):
             self.read(table(), delimiter="tab")
 
+    def test_txt_duplicate_required_header_shows_exact_positions(self):
+        with self.assertRaisesRegex(ValueError, "Checkpoint.*1열.*4열"):
+            self.read("Checkpoint,Specification,설계치,Checkpoint\nGND,GND,pin:,GND\n")
+
+    def test_txt_duplicate_auxiliary_headers_are_not_lost(self):
+        rows = self.read("Checkpoint,Specification,설계치,category,category\nGND,GND,pin:,a,b\n")
+        self.assertEqual(rows[0]["source_columns"]["category [col 4]"], "a")
+        self.assertEqual(rows[0]["source_columns"]["category [col 5]"], "b")
+
     def test_missing_file_error_includes_current_folder(self):
         with self.assertRaisesRegex(ValueError, "현재 폴더"):
             p.read_input(self.folder / "missing.txt", "sheet", 1)

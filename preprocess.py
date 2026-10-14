@@ -86,26 +86,49 @@ def build_records(rows, sheet, header_row):
     except StopIteration:
         raise ValueError("헤더 행이 없습니다")
     keys = [header_key(h) for h in headers]
+    positions = {}
+    for column, key in enumerate(keys, 1):
+        if key:
+            positions.setdefault(key, []).append(column)
+    duplicates = {key: cols for key, cols in positions.items() if len(cols) > 1}
+    used_duplicates = {key: cols for key, cols in duplicates.items() if key in FIELDS}
+    if used_duplicates:
+        detail = "; ".join(
+            f"{headers[cols[0] - 1]!r}: " + ", ".join(f"{col}열({headers[col - 1]!r})" for col in cols)
+            for key, cols in used_duplicates.items())
+        raise ValueError(f"처리에 사용하는 헤더가 정규화 후 중복됩니다: {detail}. "
+                         "실제로 사용할 열 하나만 해당 이름으로 두고, 나머지는 다른 이름으로 바꾸세요.")
     for required in ("checkpoint", "specification", "설계치"):
         if keys.count(required) != 1:
             raise ValueError(f"필수 열 {required!r}이 없거나 중복입니다. 실제 헤더: {headers}")
-    nonempty = [k for k in keys if k]
-    if len(set(nonempty)) != len(nonempty):
-        raise ValueError("정규화 후 중복되는 헤더가 있습니다")
+    source_headers, renamed = list(headers), []
+    reserved = set(headers)
+    for column, (original, key) in enumerate(zip(headers, keys), 1):
+        if key not in duplicates:
+            continue
+        stored_as = f"{original} [col {column}]"
+        suffix = 2
+        while stored_as in reserved:
+            stored_as = f"{original} [col {column}.{suffix}]"
+            suffix += 1
+        source_headers[column - 1] = stored_as
+        reserved.add(stored_as)
+        renamed.append({"column": column, "original": original, "stored_as": stored_as})
     records = []
     for excel_row, values in enumerate(iterator, header_row + 1):
         if not any(v is not None and str(v).strip() for v in values):
             continue
-        source = {h: cell_value(v) for h, v in zip(headers, values) if h}
-        normalized = {FIELDS[k]: normalize_text(source[h]) for h, k in zip(headers, keys) if k in FIELDS}
+        source = {h: cell_value(v) for h, v in zip(source_headers, values) if h}
+        normalized = {FIELDS[k]: normalize_text(source[h]) for h, k in zip(source_headers, keys) if k in FIELDS}
         normalized = {k: normalized.get(k, "") for k in ("checkpoint", "specification", "design_template", "reference_document", "pin_info", "adminno", "seqno")}
         identifiers = (normalized["adminno"], normalized["seqno"])
         checkpoint_id = ":".join(identifiers) if all(identifiers) else f"row:{excel_row}"
-        formula_fields = [h for h, k in zip(headers, keys) if k in FIELDS and isinstance(source[h], str) and source[h].startswith("=")]
+        formula_fields = [h for h, k in zip(source_headers, keys) if k in FIELDS and isinstance(source[h], str) and source[h].startswith("=")]
         records.append({
             "row_uid": f"{sheet}:{excel_row}", "checkpoint_id": checkpoint_id,
             "sheet": sheet, "excel_row": excel_row,
             "source_columns": source, "normalized_source": normalized,
+            **({"renamed_headers": renamed} if renamed else {}),
             "source_issues": (["formula_requires_cached_value"] if formula_fields else []) +
                              (["missing_checkpoint_identifiers"] if not all(identifiers) else []),
             "formula_fields": formula_fields,
@@ -172,7 +195,7 @@ def read_delimited(path, header_row=1, encoding="auto", delimiter="auto"):
         except (StopIteration, csv.Error):
             continue
         keys = [header_key(h) for h in headers]
-        if all(keys.count(k) == 1 for k in ("checkpoint", "specification", "설계치")):
+        if all(k in keys for k in ("checkpoint", "specification", "설계치")):
             matches.append((candidate, headers, reader))
     if len(matches) != 1:
         raise ValueError("CSV 헤더 또는 구분자를 확인하세요. Checkpoint, Specification, 설계치 열이 필요합니다. "
