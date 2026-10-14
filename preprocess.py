@@ -472,8 +472,11 @@ class Gemini:
         with tempfile.TemporaryDirectory(prefix="checkpoint-gemini-") as directory:
             work = Path(directory)
             (work / ".gemini").mkdir()
+            # An empty registry can become tools=[{functionDeclarations: []}],
+            # rejected by GenerateContentRequest validation. Declare one read-only
+            # tool for compatibility; the prompt still forbids tool use.
             # Project settings only; leave enterprise system settings and user auth intact.
-            settings = {"tools": {"core": []}, "mcp": {"allowed": []},
+            settings = {"tools": {"core": ["read_file"]}, "mcp": {"allowed": []},
                         "hooks": {"enabled": False}, "context": {"fileName": "CHECKPOINT_EMPTY_CONTEXT.md"},
                         "general": {"enableAutoUpdate": False}}
             (work / ".gemini" / "settings.json").write_text(dumps(settings), encoding="utf-8")

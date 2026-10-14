@@ -37,6 +37,15 @@ log = pathlib.Path(os.environ["CHECKPOINT_TEST_CALLS"])
 with log.open("a") as f:
     f.write(json.dumps([row["request_id"] for row in payload["rows"]]) + "\n")
 mode = os.environ.get("CHECKPOINT_TEST_MODE", "")
+if mode == "validate_tools":
+    settings = json.loads(pathlib.Path(".gemini/settings.json").read_text())
+    core = settings.get("tools", {}).get("core")
+    if core == []:
+        print("The GenerateContentRequest proto is invalid: tools[0].tool_type: required one_of 'tool_type' must have one initialized field", file=sys.stderr)
+        sys.exit(1)
+    if not core or set(core) != {"read_file"}:
+        print("Only the read-only compatibility tool may be declared", file=sys.stderr)
+        sys.exit(1)
 if mode == "auth":
     print("authentication required", file=sys.stderr)
     sys.exit(1)
@@ -133,6 +142,13 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(len(self.calls.read_text().splitlines()), 1)
         self.assertEqual([r["status"] for r in self.results()], ["error", "pending", "pending"])
         self.assertFalse((self.output / "run.lock").exists())
+
+    def test_cli_with_empty_tool_rejection_accepts_read_only_compatibility_settings(self):
+        make_xlsx(self.xlsx, [["1", "0", "unused GND", "", "pin:", ""]])
+        result = self.run_script("--attempts", "1", mode="validate_tools")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.results()[0]["status"], "normalized")
+        self.assertEqual(len(self.calls.read_text().splitlines()), 1)
 
     def test_timeout_is_recorded_and_can_resume(self):
         make_xlsx(self.xlsx, [["1", "0", "GND", "", "", ""]])

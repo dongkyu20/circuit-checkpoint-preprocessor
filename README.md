@@ -225,6 +225,18 @@ python preprocess.py "checkpoint.xlsx" --output "result" --batch-size 5 --timeou
 
 `--max-batch-chars`는 행 JSON의 문자 수 목표이며 토큰 수나 CLI 최대 입력 크기가 아닙니다. Schema와 프롬프트는 여기에 추가됩니다. 단일 행이 목표보다 길어도 잘라서 조건을 잃지 않도록 그대로 전송합니다.
 
+### `GenerateContentRequest proto is invalid` / `tools[0].tool_type`
+
+`required one_of 'tool_type' must have one initialized field`가 함께 표시되면 빈 도구 정의가 API 요청에 들어간 경우입니다. 이전 코드의 `"tools": {"core": []}`로 도구를 모두 끄면 일부 CLI/API 조합에서 빈 `functionDeclarations`가 전달되어 HTTP 400이 발생할 수 있습니다. 현재 코드는 읽기 전용 `read_file` 하나를 선언하고 프롬프트에서 도구 사용을 금지합니다. 셸 및 파일 변경 도구는 허용 목록에 넣지 않습니다. 이 설정은 도구 실행을 완전히 차단하는 보안 샌드박스는 아닙니다.
+
+최신 코드를 받은 뒤 데이터 파일명에 맞춰 한 행을 확인하세요. 별도 출력 폴더를 사용하면 기존 성공 캐시 때문에 CLI 호출이 생략되는 것을 피할 수 있습니다.
+
+```powershell
+python preprocess.py "data.txt" --output "cli_check_fixed" --limit 1 --batch-size 1 --attempts 1
+```
+
+기존 설정을 수동으로 바꾸는 경우 `preprocess.py`의 `settings` 안에서 `"core": []`를 `"core": ["read_file"]`로 변경하세요. 기존 프록시나 인증 설정은 바꾸지 않습니다. `HttpProxyAgent` 객체, `defaultErrorRedactor`, `duplex: 'half'`의 출력 자체는 원인 판정 근거가 아닙니다. 다른 `proto is invalid` 오류는 뒤에 표시되는 필드와 상세 메시지로 구분해야 합니다.
+
 ## 전처리 정책과 한계
 
 - 원문과 전체 열 데이터는 로컬 출력에 보존합니다. 모델에는 Checkpoint, Specification, 설계치 양식, 참조문서 셀, pin_info만 전송합니다.
@@ -233,7 +245,7 @@ python preprocess.py "checkpoint.xlsx" --output "result" --batch-size 5 --timeou
 - 수식 셀은 자동 계산하지 않습니다. 관련 수식이 있으면 결과값으로 저장한 입력 사본을 사용하거나 별도 전처리로 해소해야 합니다.
 - 첨부 PDF/메일의 파일명을 문서 본문으로 취급하지 않습니다. 외부 문서 읽기는 구현하지 않았습니다. 표나 본문이 필요하면 해당 원문을 별도로 확보해야 합니다.
 - Gemini CLI는 headless 모드에서도 `@file` 전처리를 할 수 있어, 전송 JSON의 `@`를 가역적인 `\u0040` escape로 표현합니다. 저장된 원문과 JSON 의미는 유지합니다.
-- CLI용 임시 작업 폴더에서 내장 도구, MCP 허용 목록, hooks를 비활성화하고 `--extensions none`을 사용합니다. 기존 사용자 인증과 조직의 system 설정은 바꾸지 않습니다. YOLO 모드는 사용하지 않습니다.
+- CLI용 임시 작업 폴더에서 내장 도구 허용 목록을 읽기 전용 `read_file` 하나로 제한하고, MCP 허용 목록과 hooks를 비활성화하며 `--extensions none`을 사용합니다. 프롬프트는 도구 사용을 금지합니다. 기존 사용자 인증과 조직의 system 설정은 바꾸지 않습니다. YOLO 모드는 사용하지 않습니다. 임시 폴더는 프로세스의 파일 접근을 막는 보안 샌드박스가 아니며 조직의 system 설정이 프로젝트 설정보다 우선할 수 있습니다.
 - 구조 검사는 이 Schema에서 사용하는 type/required/properties/additionalProperties/enum/minLength/minItems만 지원합니다. Schema를 새 기능으로 확장하면 검증기도 같이 확장하거나 일반 JSON Schema 라이브러리로 교체하세요.
 - 각 evidence 인용이 해당 원문에 실제 존재하는지 확인합니다. 이 검사만으로 번역과 요약, 수치 해석, 모든 조건의 보존까지 증명할 수는 없습니다. 먼저 30행의 의미를 검토하고 전체 결과에서도 표본 및 issues 항목을 확인하세요.
 - 값과 단위는 추출하되 현재 코드에서 단위 환산이나 전기적 계산은 하지 않습니다. 권고값을 필수값으로 바꾸지 않도록 프롬프트에 지정했지만 모델 출력의 의미는 검토가 필요합니다.
