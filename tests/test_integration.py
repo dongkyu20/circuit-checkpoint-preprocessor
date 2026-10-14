@@ -37,6 +37,20 @@ log = pathlib.Path(os.environ["CHECKPOINT_TEST_CALLS"])
 with log.open("a") as f:
     f.write(json.dumps([row["request_id"] for row in payload["rows"]]) + "\n")
 mode = os.environ.get("CHECKPOINT_TEST_MODE", "")
+if mode == "validate_hooks":
+    settings = json.loads(pathlib.Path(".gemini/settings.json").read_text())
+    if "enabled" in settings.get("hooks", {}):
+        print("Invalid configuration: hooks.enabled Expected array, received boolean", file=sys.stderr)
+        sys.exit(55)
+    if settings.get("hooksConfig", {}).get("enabled") is not False:
+        print("Hooks must be disabled using hooksConfig.enabled", file=sys.stderr)
+        sys.exit(55)
+if mode == "require_trust" and os.environ.get("GEMINI_CLI_TRUST_WORKSPACE") != "true":
+    print("Gemini CLI is not running in a trusted directory", file=sys.stderr)
+    sys.exit(1)
+if mode == "config_error":
+    print("Invalid configuration in .gemini/settings.json", file=sys.stderr)
+    sys.exit(55)
 if mode == "validate_tools":
     settings = json.loads(pathlib.Path(".gemini/settings.json").read_text())
     core = settings.get("tools", {}).get("core")
@@ -149,6 +163,29 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.results()[0]["status"], "normalized")
         self.assertEqual(len(self.calls.read_text().splitlines()), 1)
+
+    def test_cli_accepts_hook_settings_and_keeps_hooks_disabled(self):
+        make_xlsx(self.xlsx, [["1", "0", "unused GND", "", "pin:", ""]])
+        result = self.run_script("--attempts", "1", mode="validate_hooks")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.results()[0]["status"], "normalized")
+
+    def test_generated_temp_workspace_can_run_with_headless_trust_enabled(self):
+        make_xlsx(self.xlsx, [["1", "0", "unused GND", "", "pin:", ""]])
+        result = self.run_script("--attempts", "1", mode="require_trust")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.results()[0]["status"], "normalized")
+
+    def test_invalid_configuration_stops_once_and_resumes_after_fix(self):
+        make_xlsx(self.xlsx, [["1", "0", "unused GND", "", "pin:", ""],
+                              ["2", "0", "other GND", "", "pin:", ""]])
+        result = self.run_script("--batch-size", "1", "--attempts", "3", mode="config_error")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(len(self.calls.read_text().splitlines()), 1)
+        self.assertNotIn("뒤 재시도", result.stdout)
+        self.assertEqual([r["status"] for r in self.results()], ["error", "pending"])
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertTrue(all(r["status"] == "normalized" for r in self.results()))
 
     def test_timeout_is_recorded_and_can_resume(self):
         make_xlsx(self.xlsx, [["1", "0", "GND", "", "", ""]])

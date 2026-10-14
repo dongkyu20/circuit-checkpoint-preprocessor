@@ -477,10 +477,13 @@ class Gemini:
             # tool for compatibility; the prompt still forbids tool use.
             # Project settings only; leave enterprise system settings and user auth intact.
             settings = {"tools": {"core": ["read_file"]}, "mcp": {"allowed": []},
-                        "hooks": {"enabled": False}, "context": {"fileName": "CHECKPOINT_EMPTY_CONTEXT.md"},
+                        "hooksConfig": {"enabled": False}, "context": {"fileName": "CHECKPOINT_EMPTY_CONTEXT.md"},
                         "general": {"enableAutoUpdate": False}}
             (work / ".gemini" / "settings.json").write_text(dumps(settings), encoding="utf-8")
-            environment = dict(os.environ, NO_COLOR="1", PYTHONIOENCODING="utf-8")
+            # Trust only this child session's generated workspace; do not persist
+            # trust for the user's Temp directory or mutate the parent environment.
+            environment = dict(os.environ, NO_COLOR="1", PYTHONIOENCODING="utf-8",
+                               GEMINI_CLI_TRUST_WORKSPACE="true")
             process = subprocess.Popen(command, cwd=work, env=environment, stdin=subprocess.PIPE,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                        encoding="utf-8", errors="replace", start_new_session=os.name != "nt")
@@ -510,7 +513,7 @@ def process_batch(batch, cache, client, attempts, backoff):
         except CliError as exc:
             # Authentication/configuration failures should not become thousands of row retries.
             text = str(exc).casefold()
-            permanent = any(s in text for s in ("401", "403", "unauthorized", "authentication", "not authenticated", "invalid api key", "cli exit 42", "unknown argument", "login"))
+            permanent = any(s in text for s in ("401", "403", "unauthorized", "authentication", "not authenticated", "invalid api key", "cli exit 42", "cli exit 55", "invalid configuration", "not running in a trusted directory", "fataluntrustedworkspaceerror", "unknown argument", "login"))
             if permanent or attempt + 1 == attempts:
                 for key, _ in remaining:
                     cache.fail(key, str(exc))
