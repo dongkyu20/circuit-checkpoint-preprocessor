@@ -79,7 +79,7 @@ def header_key(value):
     return normalize_text(value).casefold().replace(" ", "")
 
 
-def build_records(rows, sheet, header_row):
+def build_records(rows, sheet, header_row, adminno_column=None):
     iterator = iter(rows)
     try:
         headers = [str(v).strip() if v is not None else "" for v in next(iterator)]
@@ -91,7 +91,7 @@ def build_records(rows, sheet, header_row):
         if key:
             positions.setdefault(key, []).append(column)
     duplicates = {key: cols for key, cols in positions.items() if len(cols) > 1}
-    used_duplicates = {key: cols for key, cols in duplicates.items() if key in FIELDS}
+    used_duplicates = {key: cols for key, cols in duplicates.items() if key in FIELDS and key != "adminno"}
     if used_duplicates:
         detail = "; ".join(
             f"{headers[cols[0] - 1]!r}: " + ", ".join(f"{col}열({headers[col - 1]!r})" for col in cols)
@@ -101,6 +101,11 @@ def build_records(rows, sheet, header_row):
     for required in ("checkpoint", "specification", "설계치"):
         if keys.count(required) != 1:
             raise ValueError(f"필수 열 {required!r}이 없거나 중복입니다. 실제 헤더: {headers}")
+    adminno_columns = positions.get("adminno", [])
+    if adminno_column is not None and adminno_column not in adminno_columns:
+        raise ValueError(f"--adminno-column {adminno_column}은 adminno 열이 아닙니다. adminno 열 위치: {adminno_columns}")
+    adminno_index = (adminno_column if adminno_column is not None else adminno_columns[0]) - 1 if adminno_columns else None
+    field_indexes = {key: i for i, key in enumerate(keys) if key in FIELDS and (key != "adminno" or i == adminno_index)}
     source_headers, renamed = list(headers), []
     reserved = set(headers)
     for column, (original, key) in enumerate(zip(headers, keys), 1):
@@ -118,19 +123,30 @@ def build_records(rows, sheet, header_row):
     for excel_row, values in enumerate(iterator, header_row + 1):
         if not any(v is not None and str(v).strip() for v in values):
             continue
+        adminno_values = [normalize_text(cell_value(values[col - 1])) for col in adminno_columns]
+        adminno_differs = len(set(adminno_values)) > 1
+        if adminno_differs and adminno_column is None:
+            columns = ", ".join(f"{col}열" for col in adminno_columns)
+            raise ValueError(f"adminno 값이 서로 다릅니다: 레코드 {excel_row}, {columns}. "
+                             "조인 기준과 식별자를 확인한 뒤 --adminno-column N으로 사용할 열을 지정하세요.")
         source = {h: cell_value(v) for h, v in zip(source_headers, values) if h}
-        normalized = {FIELDS[k]: normalize_text(source[h]) for h, k in zip(source_headers, keys) if k in FIELDS}
+        normalized = {FIELDS[key]: normalize_text(source[source_headers[i]]) for key, i in field_indexes.items()}
         normalized = {k: normalized.get(k, "") for k in ("checkpoint", "specification", "design_template", "reference_document", "pin_info", "adminno", "seqno")}
         identifiers = (normalized["adminno"], normalized["seqno"])
         checkpoint_id = ":".join(identifiers) if all(identifiers) else f"row:{excel_row}"
-        formula_fields = [h for h, k in zip(source_headers, keys) if k in FIELDS and isinstance(source[h], str) and source[h].startswith("=")]
+        formula_fields = [source_headers[i] for i in field_indexes.values()
+                          if isinstance(source[source_headers[i]], str) and source[source_headers[i]].startswith("=")]
         records.append({
             "row_uid": f"{sheet}:{excel_row}", "checkpoint_id": checkpoint_id,
             "sheet": sheet, "excel_row": excel_row,
             "source_columns": source, "normalized_source": normalized,
             **({"renamed_headers": renamed} if renamed else {}),
+            **({"adminno_selection": {"column": adminno_index + 1,
+                "mode": "explicit" if adminno_column is not None else "equal_duplicate"}}
+               if len(adminno_columns) > 1 or adminno_column is not None else {}),
             "source_issues": (["formula_requires_cached_value"] if formula_fields else []) +
-                             (["missing_checkpoint_identifiers"] if not all(identifiers) else []),
+                             (["missing_checkpoint_identifiers"] if not all(identifiers) else []) +
+                             (["adminno_values_differ"] if adminno_differs else []),
             "formula_fields": formula_fields,
             "eligible": bool(normalized["checkpoint"] or normalized["specification"]) and not formula_fields
         })
@@ -141,7 +157,7 @@ def build_records(rows, sheet, header_row):
     return records
 
 
-def read_xlsx(path, sheet, header_row):
+def read_xlsx(path, sheet, header_row, adminno_column=None):
     try:
         from openpyxl import load_workbook
     except ImportError as exc:
@@ -151,7 +167,7 @@ def read_xlsx(path, sheet, header_row):
     try:
         if sheet not in book.sheetnames:
             raise ValueError(f"시트 {sheet!r}가 없습니다. 실제 시트: {book.sheetnames}")
-        return build_records(book[sheet].iter_rows(min_row=header_row, values_only=True), sheet, header_row)
+        return build_records(book[sheet].iter_rows(min_row=header_row, values_only=True), sheet, header_row, adminno_column)
     finally:
         book.close()
 
@@ -180,7 +196,7 @@ def parse_delimiter(value):
     return value
 
 
-def read_delimited(path, header_row=1, encoding="auto", delimiter="auto"):
+def read_delimited(path, header_row=1, encoding="auto", delimiter="auto", adminno_column=None):
     text, used_encoding = decode_table(path, encoding)
     delimiter = parse_delimiter(delimiter)
     candidates = [",", "\t", ";", "|"] if delimiter == "auto" else [delimiter]
@@ -211,7 +227,7 @@ def read_delimited(path, header_row=1, encoding="auto", delimiter="auto"):
             values.append(row)
     except csv.Error as exc:
         raise ValueError(f"CSV 형식 오류 (물리 줄 {reader.line_num}): {exc}. 따옴표와 셀 내부 개행을 확인하세요.") from exc
-    records = build_records(values, f"csv:{path.name}", header_row)
+    records = build_records(values, f"csv:{path.name}", header_row, adminno_column)
     for record in records:
         record["record_row"] = record["excel_row"]
         record["excel_row"] = None
@@ -222,18 +238,18 @@ def read_delimited(path, header_row=1, encoding="auto", delimiter="auto"):
     return records
 
 
-def read_input(path, sheet, header_row, encoding="auto", delimiter="auto"):
+def read_input(path, sheet, header_row, encoding="auto", delimiter="auto", adminno_column=None):
     path = Path(path)
     if not path.is_file():
         raise ValueError(f"입력 파일을 찾지 못했습니다: {path.resolve()}\n현재 폴더: {Path.cwd()}\n실제 파일명 또는 전체 경로를 지정하세요.")
     suffix = path.suffix.casefold()
     if suffix in (".xlsx", ".xlsm"):
-        records = read_xlsx(path, sheet, header_row)
+        records = read_xlsx(path, sheet, header_row, adminno_column)
         for record in records:
             record["input_format"] = "xlsx"
         return records
     if suffix in (".csv", ".txt", ".tsv"):
-        return read_delimited(path, header_row, encoding, delimiter)
+        return read_delimited(path, header_row, encoding, delimiter, adminno_column)
     raise ValueError(f"지원하지 않는 확장자 {suffix!r}. XLSX, CSV, TXT 또는 TSV 파일을 지정하세요.")
 
 
@@ -532,6 +548,7 @@ def main(argv=None):
     parser.add_argument("--header-row", type=int, default=1, help="헤더 행/CSV 논리 레코드 번호")
     parser.add_argument("--encoding", default="auto", help="CSV/TXT 인코딩: auto(UTF-8, BOM UTF-16, CP949) 또는 직접 지정")
     parser.add_argument("--delimiter", default="auto", help="CSV/TXT 구분자: auto, comma, tab, semicolon, pipe 또는 한 문자")
+    parser.add_argument("--adminno-column", type=int, help="중복 adminno 중 사용할 열의 1부터 시작하는 전체 표 열 번호")
     parser.add_argument("--output", type=Path, default=Path("preprocessed"))
     parser.add_argument("--limit", type=int, help="빈 행 제외 상위 N행만 처리")
     parser.add_argument("--batch-size", type=int, default=10)
@@ -545,14 +562,14 @@ def main(argv=None):
     parser.add_argument("--cache-tag", default="", help="기본 모델/CLI 설정 변경 시 새 태그로 캐시 분리")
     parser.add_argument("--dry-run", action="store_true", help="입력 정규화만 수행; Gemini 호출 없음")
     args = parser.parse_args(argv)
-    if min(args.header_row, args.batch_size, args.max_batch_chars, args.attempts) < 1 or args.timeout <= 0 or args.interval < 0 or args.backoff < 0 or (args.limit is not None and args.limit < 1):
+    if min(args.header_row, args.batch_size, args.max_batch_chars, args.attempts) < 1 or args.timeout <= 0 or args.interval < 0 or args.backoff < 0 or (args.limit is not None and args.limit < 1) or (args.adminno_column is not None and args.adminno_column < 1):
         parser.error("행/배치/시도 횟수/timeout/limit은 양수, interval/backoff는 0 이상이어야 합니다")
     if args.model and not re.fullmatch(r"[A-Za-z0-9._:/-]+", args.model):
         parser.error("모델 ID 형식이 올바르지 않습니다")
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     with run_lock(args.output):
-        rows = read_input(args.input, args.sheet, args.header_row, args.encoding, args.delimiter)
+        rows = read_input(args.input, args.sheet, args.header_row, args.encoding, args.delimiter, args.adminno_column)
         total = len(rows)
         if args.limit:
             rows = rows[:args.limit]

@@ -96,6 +96,13 @@ class TextInputTests(unittest.TestCase):
         self.assertEqual(rows[0]["source_columns"]["category [col 4]"], "a")
         self.assertEqual(rows[0]["source_columns"]["category [col 5]"], "b")
 
+    def test_joined_txt_adminno_can_be_equal_or_selected_explicitly(self):
+        text = "adminno,adminno,seqno,Checkpoint,Specification,설계치\n00123,00123,0,GND,GND,pin:\n"
+        rows = self.read(text)
+        self.assertEqual(rows[0]["checkpoint_id"], "00123:0")
+        rows = self.read(text.replace("00123,00123", "00123,00456"), adminno_column=2)
+        self.assertEqual(rows[0]["checkpoint_id"], "00456:0")
+
     def test_missing_file_error_includes_current_folder(self):
         with self.assertRaisesRegex(ValueError, "현재 폴더"):
             p.read_input(self.folder / "missing.txt", "sheet", 1)
@@ -118,6 +125,18 @@ class TextInputTests(unittest.TestCase):
         summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
         self.assertEqual(summary["input_format"], "csv")
         self.assertIsNone(summary["sheet"])
+
+    def test_cli_adminno_column_option_reaches_the_selected_join_key(self):
+        path = self.folder / "joined.txt"
+        path.write_text("adminno,adminno,seqno,Checkpoint,Specification,설계치\n00123,00456,0,GND,GND,pin:\n", encoding="utf-8")
+        output = self.folder / "selected"
+        result = subprocess.run([sys.executable, str(ROOT / "preprocess.py"), str(path),
+            "--adminno-column", "2", "--output", str(output), "--dry-run"],
+            capture_output=True, text=True, encoding="utf-8", timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = json.loads((output / "prepared.jsonl").read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(record["checkpoint_id"], "00456:0")
+        self.assertEqual(record["adminno_selection"]["column"], 2)
 
 
 if __name__ == "__main__":

@@ -71,8 +71,16 @@ CSV/TXT 입력만 사용할 때는 openpyxl이 필요하지 않습니다. 실제
 헤더를 비교할 때 앞뒤 공백, 대소문자, 공백 차이를 정규화합니다. 예를 들어 `Admin No`와 `adminno`는 동일한 처리용 열로 인식됩니다.
 
 - 처리에 쓰지 않는 보조 열이 중복되면 `category [col 4]`, `category [col 5]`처럼 열 번호를 붙여 두 열의 값을 모두 보존합니다. 원래 이름과 저장 이름은 출력의 `renamed_headers`에서 확인할 수 있습니다.
-- `Checkpoint`, `Specification`, `설계치`, `adminno`, `seqno`, `참조문서`, `pin_info` 중 하나가 중복되면 어떤 열이 실제 기준인지 추측하지 않습니다. 오류에 이름과 열 위치를 표시합니다. 사용할 열만 해당 이름으로 남기고, 다른 열은 의미가 구분되는 이름으로 바꿔 주세요.
+- 조인으로 `adminno`가 여러 개 남은 경우, 모든 데이터 행에서 정규화한 값이 같으면 첫 번째 열을 식별자로 사용하고 원본 열들은 모두 보존합니다. 값이 다른 행은 자동 선택하지 않고 해당 레코드와 열 위치를 표시합니다.
+- 서로 다른 `adminno`가 의도된 경우 `--adminno-column N`으로 사용할 열을 지정할 수 있습니다. N은 adminno 중 몇 번째인지가 아니라 전체 표에서 1부터 시작하는 열 번호입니다. 선택 내역은 `adminno_selection`, 값 차이는 `source_issues`에 남습니다.
+- `Checkpoint`, `Specification`, `설계치`, `seqno`, `참조문서`, `pin_info`가 중복되면 어떤 열이 실제 기준인지 추측하지 않습니다. 오류에 이름과 열 위치를 표시합니다. 사용할 열만 해당 이름으로 남기고, 다른 열은 의미가 구분되는 이름으로 바꿔 주세요.
 - 이 오류는 데이터 행 중복이나 문장 정규화 오류를 뜻하지 않습니다. 입력 헤더의 이름 충돌입니다.
+
+예를 들어 사용할 `adminno`가 전체 표의 4번째 열이라면:
+
+```powershell
+python preprocess.py "rules.txt" --adminno-column 4 --output "result" --limit 30 --dry-run
+```
 
 ### 1. AI 호출 없이 읽기 확인
 

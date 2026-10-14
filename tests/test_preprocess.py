@@ -128,7 +128,7 @@ class PreprocessTests(unittest.TestCase):
         self.assertEqual(records[0]["source_columns"]["refdate [col 5]"], "2017")
 
     def test_duplicate_used_headers_report_names_and_column_positions(self):
-        for names in (["adminno", "Admin No"], ["참조문서", "참조문서"]):
+        for names in (["seqno", "Seq No"], ["참조문서", "참조문서"]):
             with self.subTest(names=names):
                 with self.assertRaisesRegex(ValueError, "4열.*5열"):
                     p.build_records([["Checkpoint", "Specification", "설계치", *names]], "s", 1)
@@ -143,6 +143,28 @@ class PreprocessTests(unittest.TestCase):
         self.assertEqual(values["x [col 4]"], "c")
         self.assertIn("a", values.values())
         self.assertIn("b", values.values())
+
+    def test_identical_joined_adminno_columns_are_used_without_losing_sources(self):
+        rows = p.build_records([
+            ["Checkpoint", "Specification", "설계치", "adminno", "adminno", "seqno"],
+            ["GND", "GND", "pin:", "00123", "00123", "0"]
+        ], "s", 1)
+        self.assertEqual(rows[0]["checkpoint_id"], "00123:0")
+        self.assertEqual(rows[0]["source_columns"]["adminno [col 4]"], "00123")
+        self.assertEqual(rows[0]["source_columns"]["adminno [col 5]"], "00123")
+        self.assertEqual(rows[0]["adminno_selection"]["mode"], "equal_duplicate")
+
+    def test_differing_joined_adminno_columns_require_explicit_selection(self):
+        values = [["Checkpoint", "Specification", "설계치", "adminno", "adminno", "seqno"],
+                  ["GND", "GND", "pin:", "10", "20", "0"]]
+        with self.assertRaisesRegex(ValueError, "adminno.*4열.*5열"):
+            p.build_records(values, "s", 1)
+        rows = p.build_records(values, "s", 1, adminno_column=5)
+        self.assertEqual(rows[0]["checkpoint_id"], "20:0")
+        self.assertEqual(rows[0]["adminno_selection"]["mode"], "explicit")
+        self.assertIn("adminno_values_differ", rows[0]["source_issues"])
+        with self.assertRaisesRegex(ValueError, "adminno"):
+            p.build_records(values, "s", 1, adminno_column=2)
 
     def test_schema_rejects_unexpected_properties(self):
         bad = analysis()
